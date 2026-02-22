@@ -1,0 +1,723 @@
+{
+  "project": "opencode-go-mcp",
+  "version": "0.5.0-local",
+  "description": "AI Agent VS Code 风格本地开发后端的完整任务清单。所有任务按严格依赖顺序展开，执行完全部任务后，项目应完整可运行。",
+  "agent_global_instructions": [
+    "你是一个初级 AI 代码助手，只能一次读取并完成一个细分任务。",
+    "不要试图自己规划全局，只执行当前 task 对象里的要求。",
+    "完成当前任务后，再请求/读取下一个任务，直到所有任务 status 都变为 done。",
+    "修改代码时，只能编辑当前 task 指定的文件（File 字段）和相关函数，不要跨文件修改。"
+  ],
+  "tasks": [
+    {
+      "id": "1.1_config_struct",
+      "phase": "阶段一：配置与日志基础",
+      "name": "完整定义本地模式配置结构与默认值",
+      "status": "done",
+      "file": "internal/config/config.go",
+      "dependencies": [],
+      "objective": "在 Config 结构体中只保留本地模式需要的字段，并为后续模块提供统一配置来源。",
+      "implementation": [
+        "在 internal/config/config.go 中定义 Config 结构体字段：ConfigFile string, LogLevel string, RootDir string, AllowedBuildCommands []string, MaxFileBytes int64, AllowedPaths []string, BlockedExtensions []string, BuildTimeout int64。",
+        "为每个字段添加注释，解释字段在纯本地模式下的作用，例如 RootDir 表示工作区根目录，AllowedBuildCommands 是命令白名单。",
+        "删除或标记废弃所有远程 AI Provider 或远程 OpenCode 使用的字段与模板，确保不会再被代码引用。",
+        "在常量区定义默认值：DefaultLogLevel=\"info\"，DefaultMaxFileBytes=1024*1024（1MB），必要时保留 DefaultMaxSearchResults 并在注释中解释用途。",
+        "保证 Config 结构体能被整个项目安全引用，不包含任何需要外部 SDK 的字段。"
+      ],
+      "edge_cases": [
+        "删除字段前必须全局搜索引用，避免破坏编译。",
+        "如果保留历史兼容字段（例如 ProviderConfig），需要在注释中说明当前本地模式不会使用它们。"
+      ]
+    },
+    {
+      "id": "1.2_load_config",
+      "phase": "阶段一：配置与日志基础",
+      "name": "实现配置加载（环境变量 + 配置文件）",
+      "status": "done",
+      "file": "internal/config/config.go",
+      "dependencies": ["1.1_config_struct"],
+      "objective": "实现 LoadConfig 函数，从配置文件和环境变量加载 Config，并填充默认值。",
+      "implementation": [
+        "实现 func LoadConfig() (*Config, error) 函数。",
+        "创建 cfg := &Config{}，先填入基础默认值，如 cfg.LogLevel = DefaultLogLevel, cfg.MaxFileBytes = DefaultMaxFileBytes。",
+        "读取环境变量 OPENCODE_MCP_CONFIG 作为配置文件路径，非空时使用 filepath.Abs 归一化路径，尝试打开并用 json.NewDecoder(file).Decode(cfg) 解析配置文件。",
+        "如果配置文件路径不存在，应视为“没有配置文件”，直接跳过文件加载而不是报错。",
+        "为 RootDir、LogLevel、BuildTimeout、MaxFileBytes 等关键字段定义环境变量覆盖策略，如 OPENCODE_MCP_ROOT, OPENCODE_MCP_LOG_LEVEL, OPENCODE_MCP_BUILD_TIMEOUT 等。",
+        "对 BuildTimeout 和 MaxFileBytes 等数值字段，从环境变量解析 int 或 int64，解析失败时返回错误或使用默认值并在错误信息中说明。",
+        "执行默认值回填：当 cfg.MaxFileBytes <= 0 时设为 DefaultMaxFileBytes，当 cfg.BuildTimeout <= 0 时设为安全默认值（如 60 秒）。",
+        "最后返回 cfg，如过程中遇到 IO 或 JSON 解析错误，返回包含路径和底层错误信息的 error。"
+      ],
+      "edge_cases": [
+        "配置文件存在但 JSON 语法错误时必须返回错误，不能默默忽略。",
+        "环境变量值非法时（例如无效整数）需要明确报错或回退默认值，避免静默失败。"
+      ]
+    },
+    {
+      "id": "1.3_validate_config",
+      "phase": "阶段一：配置与日志基础",
+      "name": "实现配置验证逻辑",
+      "status": "done",
+      "file": "internal/config/config.go",
+      "dependencies": ["1.1_config_struct", "1.2_load_config"],
+      "objective": "实现 Config.Validate 方法，对每个关键字段做合法性检查，集中返回所有错误。",
+      "implementation": [
+        "实现 func (c *Config) Validate() error 方法。",
+        "在方法内创建 errs := []error{} 用于累积验证错误。",
+        "检查 LogLevel 是否在允许集 {\"debug\",\"info\",\"warn\",\"error\"} 中，否则向 errs 追加带字段名的错误。",
+        "检查 MaxFileBytes > 0，否则向 errs 追加错误，说明必须为正数。",
+        "检查 BuildTimeout > 0，否则向 errs 追加错误；该字段用于命令执行超时。",
+        "检查 BlockedExtensions：每项应以 '.' 开头且非空，否则追加错误。",
+        "RootDir 不在此处检查是否存在，由 Workspace 创建阶段处理。",
+        "若 len(errs)==0，返回 nil；否则构造一个聚合错误（例如 validationError 类型），将所有子错误消息拼接成一条字符串返回。",
+        "确保 cmd/opencode-mcp/main.go 的 loadConfigAndLogger 调用了 cfg.Validate()。"
+      ],
+      "edge_cases": [
+        "存在多个错误时必须全部返回，不能只返回第一个。",
+        "对包含空白字符串的字段先 TrimSpace 再判断，避免误通过。"
+      ]
+    },
+    {
+      "id": "1.4_logger_impl",
+      "phase": "阶段一：配置与日志基础",
+      "name": "实现标准日志器 StdLogger",
+      "status": "done",
+      "file": "internal/log/logger.go",
+      "dependencies": ["1.1_config_struct"],
+      "objective": "实现一个简单的 Logger 接口和基于标准库 log 的 StdLogger 实现，用于全局日志输出。",
+      "implementation": [
+        "定义 Logger 接口，包含 Debug/Info/Warn/Error 四个方法，签名为 func(ctx context.Context, msg string, kv ...any)。",
+        "定义 StdLogger 结构体，包含底层 *log.Logger 实例以及一个内部表示日志级别的字段（如 int 或字符串）。",
+        "实现 func NewStdLogger(level string) Logger：对 level 做 strings.ToLower 和 TrimSpace，如非法则回退为 \"info\"，使用 log.New(os.Stderr, \"\", log.LstdFlags) 创建底层 logger。",
+        "在每个日志方法中，根据当前日志级别决定是否输出，例如 level==\"info\" 时忽略 Debug 日志。",
+        "实现辅助函数 formatMessage(msg string, kv ...any) 将键值对转换为 \"key=value\" 串，附加在消息末尾，用空格分隔。",
+        "在 Debug/Info/Warn/Error 中，统一输出格式为 \"[LEVEL]\" 前缀加上 formatMessage 的结果。"
+      ],
+      "edge_cases": [
+        "当 kv 长度为奇数时，只使用成对的部分（长度向下取偶数），避免越界。",
+        "日志输出中避免过长内容阻塞终端，如有必要可以在未来通过调用方控制。"
+      ]
+    },
+    {
+      "id": "1.5_workspace_interface",
+      "phase": "阶段一：配置与日志基础",
+      "name": "定义 Workspace 抽象接口",
+      "status": "done",
+      "file": "internal/workspace/workspace.go",
+      "dependencies": [],
+      "objective": "将本地工作区能力抽象成 Workspace 接口，为后续 OSWorkspace 实现提供统一抽象。",
+      "implementation": [
+        "在 internal/workspace/workspace.go 中定义接口：type Workspace interface { ... }。",
+        "接口包含三个方法：ReadFile(ctx context.Context, path string, maxBytes int64) ([]byte, error)、WriteFile(ctx context.Context, path string, data []byte, allowCreate bool) error、Execute(ctx context.Context, cmd string, args []string, timeoutSeconds int64) (stdout string, stderr string, exitCode int, err error)。",
+        "确保接口中不包含任何远程 Project 或 OpenCode 概念，只处理本地路径和受控命令。"
+      ],
+      "edge_cases": [
+        "不要在接口中引入与本地文件系统无关的配置字段或业务概念。",
+        "接口签名修改时，需要同步更新所有实现和调用者。"
+      ]
+    },
+    {
+      "id": "2.1_osworkspace_struct_new",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现 OSWorkspace 结构与构造函数",
+      "status": "done",
+      "file": "internal/workspace/os_workspace.go",
+      "dependencies": ["1.1_config_struct", "1.5_workspace_interface"],
+      "objective": "定义 OSWorkspace 结构并通过配置创建本地工作区实例，决定根目录和命令白名单。",
+      "implementation": [
+        "在 os_workspace.go 中导入 \"opencode-go-mcp/internal/config\" 包。",
+        "定义 OSWorkspace 结构体：root string, allowedCommands []string, cfg *config.Config。",
+        "实现 func NewOSWorkspace(cfg *config.Config) (Workspace, error)。",
+        "在 NewOSWorkspace 中，如果 cfg.RootDir 非空，使用 filepath.Abs(cfg.RootDir) 获取绝对路径 root，失败时返回错误；否则使用 os.Getwd() 获取当前工作目录，再转为绝对路径作为 root。",
+        "创建 allowedCommands 切片，拷贝 cfg.AllowedBuildCommands；若原切片为空，则使用默认值 []string{\"go\",\"go test\",\"go build\",\"go run\"}。",
+        "返回 &OSWorkspace{root: root, allowedCommands: allowedCommands, cfg: cfg}。"
+      ],
+      "edge_cases": [
+        "RootDir 解析失败或获取工作目录失败时必须返回错误，不能继续使用空字符串。",
+        "构造函数不应创建任何目录或文件，只负责内存结构初始化。"
+      ]
+    },
+    {
+      "id": "2.2_sanitize_path",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现路径安全检查 sanitizePath",
+      "status": "done",
+      "file": "internal/workspace/os_workspace.go",
+      "dependencies": ["2.1_osworkspace_struct_new"],
+      "objective": "将任意用户输入路径转换为受限在工作区内且符合 AllowedPaths 白名单的安全绝对路径。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) sanitizePath(path string) (string, error)。",
+        "对 path 使用 strings.TrimSpace，若为空返回错误；然后使用 filepath.Clean 做规范化。",
+        "如果 filepath.IsAbs(path) 为真，则 absPath=path，否则 absPath=filepath.Join(w.root, path)。",
+        "调用 filepath.EvalSymlinks(absPath)：若返回 os.IsNotExist(err)，说明目标可能是新文件，继续使用 absPath；其它错误则返回，错误信息包含原始 path。",
+        "对解析后的 absPath 再次执行 filepath.Clean，并使用 filepath.Rel(w.root, absPath) 计算 rel；如果 rel 为 \"..\" 或以 \"..\"+路径分隔符开头，则返回错误，说明路径越界。",
+        "如果 len(w.cfg.AllowedPaths) > 0，则将每个 allowedPrefix 转为绝对路径（相对路径基于 w.root），并 Clean，然后检查 absPath 是否以其中任一 absAllowed 为前缀；若都不匹配，则返回错误，说明该路径不在白名单中。",
+        "成功时返回最终的 absPath。"
+      ],
+      "edge_cases": [
+        "路径中包含大量 \"..\" 时也必须通过 Rel 检测防止逃出 root。",
+        "符号链接指向工作区外部时必须被拒绝。"
+      ]
+    },
+    {
+      "id": "2.3_blocked_ext_and_allowed_cmd",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现扩展名黑名单与命令白名单检查",
+      "status": "done",
+      "file": "internal/workspace/os_workspace.go",
+      "dependencies": ["2.1_osworkspace_struct_new"],
+      "objective": "提供统一的扩展名黑名单检查和命令白名单检查函数，供所有文件操作和执行逻辑使用。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) isBlockedExtension(path string) bool：使用 strings.ToLower(filepath.Ext(path)) 取扩展名，空扩展名返回 false。",
+        "遍历 w.cfg.BlockedExtensions，将每个 blocked 用 strings.ToLower 处理，与 ext 比较，相等则返回 true；遍历结束仍未命中则返回 false。",
+        "实现 func (w *OSWorkspace) isAllowedCommand(cmd string) bool：对 cmd TrimSpace，空字符串直接返回 false；使用 strings.Fields 分词，长度为 0 时返回 false。",
+        "取第一个单词作为 baseCmd，遍历 w.allowedCommands，对每个 allowed 先 TrimSpace，空白则跳过。",
+        "若 allowed 与 baseCmd 精确相等，返回 true；否则检查 strings.HasPrefix(cmd, allowed)，如果匹配且匹配结束位置后是空格/制表符或字符串结束，则返回 true。",
+        "未命中任何 allowed 时返回 false。"
+      ],
+      "edge_cases": [
+        "BlockedExtensions 比较必须大小写不敏感。",
+        "当 allowedCommands 为空时，所有命令都应返回 false。"
+      ]
+    },
+    {
+      "id": "2.4_read_file",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现安全文件读取 ReadFile",
+      "status": "done",
+      "file": "internal/workspace/os_workspace.go",
+      "dependencies": ["2.2_sanitize_path", "2.3_blocked_ext_and_allowed_cmd"],
+      "objective": "在 MaxFileBytes 限制下安全读取文件内容，支持上下文取消，并对极大文件进行截断提示。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) ReadFile(ctx context.Context, path string, maxBytes int64) ([]byte, error)。",
+        "调用 w.sanitizePath(path) 获取 absPath，错误时返回带原始 path 的错误。",
+        "调用 w.isBlockedExtension(absPath)，若为 true，则返回说明扩展名被禁止的错误。",
+        "如果 maxBytes <= 0，则使用 w.cfg.MaxFileBytes 作为限制。",
+        "打开文件 file, err := os.Open(absPath)，并在函数结束时 defer file.Close()。",
+        "使用 limited := io.LimitReader(file, maxBytes) 创建受限 reader。",
+        "使用固定大小缓冲（如 32KB）循环从 limited 读取到 result 切片；每次读前检查 ctx.Done() 是否已取消，取消时返回 ctx.Err()。",
+        "读取完成后，使用 file.Stat() 获取真实大小；若 fileInfo.Size() > maxBytes，则返回 result 和一个包含 \"file truncated\" 字样的错误（或在错误中包含原始大小与已读大小）。",
+        "否则返回 result 和 nil。"
+      ],
+      "edge_cases": [
+        "即使文件非常大也不能一次性读取全部内容到内存。",
+        "在读取循环中遇到非 EOF 错误时必须立刻返回。"
+      ]
+    },
+    {
+      "id": "2.5_write_file",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现安全文件写入 WriteFile",
+      "status": "done",
+      "file": "internal/workspace/os_workspace.go",
+      "dependencies": ["2.2_sanitize_path", "2.3_blocked_ext_and_allowed_cmd"],
+      "objective": "使用临时文件 + 原子重命名方式安全写入文件，支持可控创建。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) WriteFile(ctx context.Context, path string, data []byte, allowCreate bool) error。",
+        "调用 w.sanitizePath(path) 获取 absPath，如失败则返回错误。",
+        "调用 w.isBlockedExtension(absPath)，如为 true 直接返回错误，禁止覆写敏感文件。",
+        "使用 filepath.Dir(absPath) 获取父目录 dir，调用 os.Stat(dir)，若 os.IsNotExist(err)，返回错误提示父目录不存在；其他错误也直接返回。",
+        "构造 tmpPath := absPath + \".tmp\"，使用 os.Create(tmpPath) 创建临时文件，失败时返回错误。",
+        "在写入前检查 ctx.Done() 是否已取消，如已取消则关闭临时文件并删除 tmpPath，然后返回 ctx.Err()。",
+        "向临时文件写入 data，写入失败时关闭并删除 tmpPath，返回错误。",
+        "调用 tmpFile.Sync() 冲刷到磁盘，失败时清理临时文件并返回错误；之后关闭临时文件，关闭失败时删除临时文件并返回错误。",
+        "如果 allowCreate 为 false，使用 os.Stat(absPath) 检查目标文件是否存在；不存在时删除 tmpPath 并返回错误。",
+        "最后使用 os.Rename(tmpPath, absPath) 原子替换文件，失败时删除 tmpPath 并返回错误。"
+      ],
+      "edge_cases": [
+        "在 Windows 上替换正在被占用的文件可能失败，需要将底层错误向上传递。",
+        "任意错误路径都必须清理 tmp 文件，避免残留垃圾文件。"
+      ]
+    },
+    {
+      "id": "2.6_execute",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现命令执行 Execute",
+      "status": "done",
+      "file": "internal/workspace/os_workspace.go",
+      "dependencies": ["2.3_blocked_ext_and_allowed_cmd"],
+      "objective": "在工作区根目录下执行白名单命令，支持超时控制和 stdout/stderr 捕获。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) Execute(ctx context.Context, cmd string, args []string, timeoutSeconds int64) (stdout string, stderr string, exitCode int, err error)。",
+        "首先调用 w.isAllowedCommand(cmd)，若返回 false，则返回 exitCode=-1 和错误，说明命令不在白名单中。",
+        "确定 timeoutSeconds：如果传入值 >0 则使用该值，否则使用 w.cfg.BuildTimeout；将秒数转换为 time.Duration。",
+        "创建 ctxWithTimeout, cancel := context.WithTimeout(ctx, timeoutDuration)，并在函数结束时 defer cancel()。",
+        "使用 exec.CommandContext(ctxWithTimeout, cmd, args...) 创建命令对象，并设置 execCmd.Dir = w.root。",
+        "使用 strings.Builder 捕获 stdout/stderr，将 execCmd.Stdout 和 execCmd.Stderr 分别指向 &stdoutBuf 和 &stderrBuf。",
+        "调用 runErr := execCmd.Run() 执行命令，从 builder 中取出 stdout/stderr 字符串赋给返回变量。",
+        "如果 runErr 不为 nil 且 ctxWithTimeout.Err()==context.DeadlineExceeded，则说明超时，设置 exitCode=-1，并返回包含 \"timeout\" 文本的错误。",
+        "如果 runErr 是 *exec.ExitError，则从 exitErr.ExitCode() 获取 exitCode，并返回包装后的错误。",
+        "其它错误（例如命令不存在）也将 exitCode 设为 -1 并返回包装后的错误。",
+        "若 runErr 为 nil，则从 execCmd.ProcessState.ExitCode() 读取 exitCode，并返回 stdout、stderr 和 nil 错误。"
+      ],
+      "edge_cases": [
+        "无论成功或失败，stdout/stderr 都应通过返回值传递给调用方。",
+        "超时场景需要保留部分输出，并清晰标记为超时。"
+      ]
+    },
+    {
+      "id": "2.7_backup_and_size",
+      "phase": "阶段二：本地 Workspace 核心实现",
+      "name": "实现 BackupAndRollback 与 PhysicalFileSize",
+      "status": "done",
+      "file": "internal/workspace/io_optimizations.go",
+      "dependencies": ["2.2_sanitize_path"],
+      "objective": "提供写操作前的备份与回滚能力，并估算文件的物理磁盘占用大小。",
+      "implementation": [
+        "在 BackupAndRollback 中调用 w.sanitizePath(path) 获取 absPath，如失败则返回两个闭包，它们被调用时都返回此错误。",
+        "设置 backupPath := absPath + \".bak\"，createBackup 闭包中先使用 os.Stat(absPath) 检查原文件是否存在，不存在时返回 nil 表示无需备份。",
+        "若原文件存在，打开原文件和备份文件，使用 io.Copy 将内容复制到备份，失败时删除备份文件并返回错误。",
+        "完成复制后调用 dst.Sync() 确保备份落盘。",
+        "rollback 闭包中使用 os.Stat(backupPath) 检查备份是否存在，不存在则返回错误。",
+        "删除可能存在的 absPath+\".tmp\" 临时文件。",
+        "打开备份文件和新建的 tmpPath 文件，将备份内容复制到 tmpPath；复制失败时删除 tmpPath 并返回错误。",
+        "使用 os.Rename(tmpPath, absPath) 原子替换原文件，失败时删除 tmpPath 并返回错误。",
+        "在 PhysicalFileSize 中调用 w.sanitizePath(path) 获取 absPath 并用 os.Stat 获取 fileInfo。",
+        "尝试从 fileInfo.Sys() 中获取平台相关信息，如果实现了 interface{ GetBlocks() int64 }，则返回 blocks*512；否则返回 fileInfo.Size()。"
+      ],
+      "edge_cases": [
+        "当备份或回滚任一步骤失败时，需要返回包含具体操作阶段和路径的错误。",
+        "在不支持 GetBlocks 的平台上要平滑降级为逻辑大小。"
+      ]
+    },
+    {
+      "id": "3.1_tree_and_inspect_workspace",
+      "phase": "阶段三：Eyes – 空间感知模块",
+      "name": "定义 TreeNode 并实现 InspectWorkspace",
+      "status": "done",
+      "file": "internal/workspace/eyes.go",
+      "dependencies": ["2.2_sanitize_path"],
+      "objective": "实现工作区目录扫描，返回结构化的 TreeNode 列表。",
+      "implementation": [
+        "确认并完善 TreeNode 结构体字段：Path string, IsDir bool, Size int64, ModTime time.Time, Children []*TreeNode，并为每个字段添加注释说明含义。",
+        "在 InspectWorkspace 中调用 w.sanitizePath(relPath) 获取 absPath，错误时返回说明 relPath 无效。",
+        "使用 os.Stat(absPath) 确保 absPath 存在且为目录，否则返回错误。",
+        "对 maxDepth <= 0 的情况设置默认值 2。",
+        "定义 ignoreDirs 映射包含 .git、node_modules、dist、build、vendor 等常见目录。",
+        "使用 filepath.WalkDir(absPath, func(path string, d os.DirEntry, walkErr error) error) 遍历目录树，每次回调先检查 ctx.Done() 是否已取消。",
+        "忽略 walkErr 非 nil 的节点，直接返回 nil 继续遍历。",
+        "使用 filepath.Rel(w.root, path) 获取 rel 路径，通过统计路径分隔符数量计算当前节点深度，超过 maxDepth 时对目录返回 filepath.SkipDir。",
+        "跳过以 '.' 开头的隐藏目录和文件（在目录上使用 SkipDir，在文件上直接返回 nil）。",
+        "为每个节点构造 TreeNode：文件从 d.Info() 中获取 Size 和 ModTime，目录 Size=0，ModTime 从目录的 Info 读取，将结果追加到 nodes 列表。",
+        "遍历完成后使用 sort.Slice 将 nodes 排序：目录优先，其次按 strings.ToLower(Path) 字典序排序。"
+      ],
+      "edge_cases": [
+        "当 rel 为 \".\" 时要正确表示根目录路径。",
+        "遇到权限不足的目录时不能导致整个扫描失败，应跳过并继续。"
+      ]
+    },
+    {
+      "id": "3.2_read_code_fragment",
+      "phase": "阶段三：Eyes – 空间感知模块",
+      "name": "实现 ReadCodeFragment 按行读取代码片段",
+      "status": "done",
+      "file": "internal/workspace/eyes.go",
+      "dependencies": ["2.2_sanitize_path", "2.3_blocked_ext_and_allowed_cmd"],
+      "objective": "根据起止行号从文件中读取代码片段，支持大文件分页和上下文取消。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) ReadCodeFragment(ctx context.Context, path string, startLine, endLine int) (lines []string, truncated bool, err error)。",
+        "校验行号范围：startLine 必须>0 且 endLine >= startLine，否则返回参数错误，其中包含具体范围。",
+        "调用 w.sanitizePath(path) 获取 absPath，如果失败则返回带 path 的安全检查错误。",
+        "调用 w.isBlockedExtension(absPath)，若为 true 返回扩展名被阻止错误。",
+        "打开文件并使用 file.Stat() 获取大小 fileSize。",
+        "若 fileSize > 20KB，则计算行数跨度 lineCount := endLine - startLine + 1，如果 lineCount > 200 返回错误提示文件过大且建议分页。",
+        "使用 bufio.NewScanner(file) 按行扫描，维护 currentLine 从 1 开始；每次循环检查 ctx.Done()，取消时返回 ctx.Err()。",
+        "在 currentLine 落在 [startLine, endLine] 范围内时，将 scanner.Text() 追加到结果切片；当 currentLine >= endLine 时中断循环。",
+        "扫描结束后检查 scanner.Err() 是否非 nil，非 nil 时返回错误。",
+        "若在 EOF 前 currentLine 仍小于 endLine，将 truncated 设置为 true。",
+        "返回结果行切片、truncated 标记和错误值。"
+      ],
+      "edge_cases": [
+        "处理空文件或行数不足文件时，需要正确标识 truncated。",
+        "必须在扫描循环中响应上下文取消，避免大文件长时间阻塞。"
+      ]
+    },
+    {
+      "id": "4.1_diff_structs",
+      "phase": "阶段四：Hands – 精准修改模块",
+      "name": "定义 DiffPatch/Hunk/Line 结构体",
+      "status": "done",
+      "file": "internal/workspace/hands.go",
+      "dependencies": [],
+      "objective": "定义表示 unified diff 的数据结构，为解析和应用补丁提供基础。",
+      "implementation": [
+        "在 hands.go 中定义 DiffPatch、Hunk、Line 三个结构体，字段分别为：",
+        "DiffPatch: FilePath string, IsNewFile bool, Hunks []Hunk, OriginalMode string, NewMode string。",
+        "Hunk: OldStart int, OldCount int, NewStart int, NewCount int, Lines []Line。",
+        "Line: Type string, Text string，其中 Type 为\"+\"、\"-\"或\" \"。",
+        "为每个字段添加注释说明其含义，例如 OldStart 是旧文件中 hunk 起始行号。"
+      ],
+      "edge_cases": [
+        "这些结构体本身不包含复杂逻辑，但类型定义必须与后续解析和应用逻辑匹配。"
+      ]
+    },
+    {
+      "id": "4.2_parse_unified_diff",
+      "phase": "阶段四：Hands – 精准修改模块",
+      "name": "实现 unified diff 解析函数",
+      "status": "done",
+      "file": "internal/workspace/hands.go",
+      "dependencies": ["4.1_diff_structs"],
+      "objective": "将 unified diff 文本解析为结构化的 []DiffPatch。",
+      "implementation": [
+        "实现 func parseUnifiedDiff(diffText string) ([]DiffPatch, error)。",
+        "使用 strings.Split(diffText, \"\\n\") 将文本拆成行，维护 currentPatch *DiffPatch, currentHunk *Hunk, inHunk bool。",
+        "遇到以 \"--- \" 开头且不为 \"--- /dev/null\" 的行时：若 currentPatch 和 currentHunk 非空，将 currentHunk 加入 currentPatch.Hunks，并调用 normalizeHunks 之后将 currentPatch 追加到 patches，随后创建新的 currentPatch 并从行中解析文件路径去掉 a/ 或 b/ 前缀。",
+        "遇到以 \"+++ \" 开头且 currentPatch 非空的行时，从行中解析新路径（去除 a/b 前缀），如果路径不是 \"/dev/null\"，则更新 currentPatch.FilePath。",
+        "遇到以 \"@@ \" 开头的行时，调用 parseHunkHeader 解析出一个新的 Hunk；如果 currentHunk 不为空，先将其追加到 currentPatch.Hunks，然后将新 hunk 赋给 currentHunk 并设置 inHunk=true。",
+        "在 inHunk == true 时对其它行进行处理：如果行首字符为 '+','-',' ' 且长度>0，将其余部分作为 lineContent，构造 Line{Type: string(line[0]), Text: line[1:]} 追加到 currentHunk.Lines。",
+        "循环结束后，如果 currentPatch 与 currentHunk 非空，将最后一个 hunk 与 patch 追加到 patches，并调用 normalizeHunks。",
+        "最后遍历 patches，对每个 patch 调用 isNewFilePatch 设置 IsNewFile 字段。"
+      ],
+      "edge_cases": [
+        "遇到不合法的 hunk 头时需要返回带行号的错误，便于排查。",
+        "需要正确处理 /dev/null 作为旧文件或新文件路径的情况。"
+      ]
+    },
+    {
+      "id": "4.3_parse_hunk_and_flags",
+      "phase": "阶段四：Hands – 精准修改模块",
+      "name": "实现 parseHunkHeader/isNewFilePatch/normalizeHunks",
+      "status": "done",
+      "file": "internal/workspace/hands.go",
+      "dependencies": ["4.1_diff_structs"],
+      "objective": "解析 hunk 头行并标记新文件补丁，同时确保 hunk 顺序正确。",
+      "implementation": [
+        "实现 func parseHunkHeader(line string) (Hunk, error)：去掉行首尾的 \"@@\"，再 TrimSpace 后按 \" +\" 分割为旧部分和新部分。",
+        "对旧部分去掉前缀 \"-\"，若包含逗号则拆分为 start,count，否则 count=1，将其分别填入 Hunk.OldStart 和 Hunk.OldCount。",
+        "对新部分去掉前缀 \"+\"，同样处理 start,count，填入 Hunk.NewStart 和 Hunk.NewCount。",
+        "实现 func isNewFilePatch(patch DiffPatch) bool：遍历所有 hunk 的所有行，只要发现 Type == \"-\" 的行就返回 false，遍历完毕仍未发现删除行则返回 true。",
+        "实现 func normalizeHunks(hunks []Hunk) []Hunk：使用 sort.Slice 按 OldStart 升序排序并返回排序后的切片。"
+      ],
+      "edge_cases": [
+        "需要考虑 hunk 头格式不符合预期时返回错误。",
+        "OldCount 或 NewCount 缺省时要合理地默认为 1。"
+      ]
+    },
+    {
+      "id": "4.4_apply_patch_to_content",
+      "phase": "阶段四：Hands – 精准修改模块",
+      "name": "实现 applyPatchToContent 将补丁应用到内存内容",
+      "status": "done",
+      "file": "internal/workspace/hands.go",
+      "dependencies": ["4.1_diff_structs", "4.3_parse_hunk_and_flags"],
+      "objective": "在内存中将 DiffPatch 应用于原始文件内容，生成新内容。",
+      "implementation": [
+        "实现 func applyPatchToContent(original []byte, patch DiffPatch) ([]byte, error)。",
+        "使用 strings.Split(string(original), \"\\n\") 将内容分割为 originalLines 切片，如果最后一个元素为空字符串说明原文以换行结尾，可将其去掉。",
+        "为保留换行语义，将 originalLines 中每一行末尾重新加上 \"\\n\"。",
+        "初始化 result := []string{} 和 oldLineNum := 1。",
+        "遍历 patch.Hunks：对每个 hunk，先将 [oldLineNum, hunk.OldStart-1] 范围内的 originalLines 拷贝到 result，并将 oldLineNum 更新到 hunk.OldStart。",
+        "在 hunk.Lines 内遍历：当 Type==\"-\" 时，如果 oldLineNum 对应的原始行文本（去掉换行符）与 line.Text 相同，则通过 oldLineNum++ 跳过此行；当 Type==\"+\" 时，将 line.Text+\"\\n\" 追加到 result；当 Type==\" \" 时，若 original 中还有对应行则追加该行并 oldLineNum++，否则直接将 line.Text+\"\\n\" 追加到 result。",
+        "所有 hunk 处理完后，将 remaining 原始行 [oldLineNum-1,...] 追加到 result。",
+        "使用 strings.Join(result, \"\") 生成最终字符串 final，如果 original 不以换行结尾，则用 strings.TrimSuffix(final, \"\\n\") 去掉最后的换行。",
+        "返回 []byte(final)。"
+      ],
+      "edge_cases": [
+        "当 hunk 声明的 OldStart/OldCount 与原始文本行数不匹配时，需要防止索引越界，可采用安全下标检查。",
+        "删除行内容与原始行不一致时，可以选择保守策略：跳过删除但继续应用其它修改。"
+      ]
+    },
+    {
+      "id": "4.5_apply_unified_diff_to_workspace",
+      "phase": "阶段四：Hands – 精准修改模块",
+      "name": "实现 ApplyUnifiedDiff 对工作区文件应用 diff",
+      "status": "done",
+      "file": "internal/workspace/hands.go",
+      "dependencies": ["2.2_sanitize_path", "2.3_blocked_ext_and_allowed_cmd", "2.7_backup_and_size", "4.2_parse_unified_diff", "4.4_apply_patch_to_content"],
+      "objective": "解析 unified diff 并对工作区文件进行修改，支持 dry-run 与备份回滚。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) ApplyUnifiedDiff(ctx context.Context, diffText string, dryRun bool) (appliedFiles []string, err error)。",
+        "调用 parseUnifiedDiff(diffText) 得到 patches 列表，解析失败直接返回错误。",
+        "初始化 appliedFiles := make([]string, 0, len(patches))。",
+        "遍历每个 patch 时先检查 ctx.Done() 是否已取消，如取消则返回已处理的 appliedFiles 和 ctx.Err()。",
+        "调用 w.sanitizePath(patch.FilePath) 获取 absPath，并用 w.isBlockedExtension(absPath) 检查扩展名，失败时返回错误。",
+        "使用 os.Stat(absPath) 检查文件是否存在：当 patch.IsNewFile 为 true 且 os.IsNotExist(err) 时允许继续；当 patch.IsNewFile 为 false 且文件不存在时返回错误。",
+        "如果不是 dryRun，调用 w.BackupAndRollback(patch.FilePath) 获取 createBackup 和 rollback，并在应用补丁前调用 createBackup()，如失败则返回错误。",
+        "若原文件存在，则通过 os.ReadFile(absPath) 获取 original 内容，否则 original 为空切片。",
+        "调用 applyPatchToContent(original, patch) 获取 patchedContent，失败时返回错误。",
+        "dryRun 模式下，将 patch.FilePath 追加到 appliedFiles 而不写盘。",
+        "非 dryRun 模式下：使用 os.WriteFile(absPath, patchedContent, 0644) 写入新内容，失败时调用 rollback() 恢复原文件并返回错误；成功写入后可删除备份文件。",
+        "循环结束后返回 appliedFiles 和 nil 错误。"
+      ],
+      "edge_cases": [
+        "某个文件写入失败时只回滚该文件，不自动回滚之前已成功的文件，由上层逻辑决定是否整体回滚。",
+        "dry-run 模式下不应产生任何实际文件写操作。"
+      ]
+    },
+    {
+      "id": "4.6_search_and_replace",
+      "phase": "阶段四：Hands – 精准修改模块",
+      "name": "实现 SearchAndReplace 精确字符串替换",
+      "status": "done",
+      "file": "internal/workspace/hands.go",
+      "dependencies": ["2.2_sanitize_path", "2.3_blocked_ext_and_allowed_cmd"],
+      "objective": "对单个文件执行精确字符串替换，支持 expectedOccurrences 校验与 dry-run。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) SearchAndReplace(ctx context.Context, path, old, new string, expectedOccurrences int) (actualOccurrences int, err error)。",
+        "参数检查：若 old 为空字符串，返回错误；若 expectedOccurrences < 0，返回错误。",
+        "调用 w.sanitizePath(path) 和 w.isBlockedExtension(absPath) 进行安全检查。",
+        "使用 os.ReadFile(absPath) 读取文件内容，转换为字符串 content。",
+        "使用 strings.Count(content, old) 计算 actualOccurrences，并在返回值中填入。",
+        "若 expectedOccurrences > 0 且 actualOccurrences != expectedOccurrences，则返回错误，错误中包含 expected 和 actual 数值。",
+        "若 expectedOccurrences == 0，则视为 dry-run，直接返回 actualOccurrences 和 nil，不写回文件。",
+        "否则执行 newContent := strings.ReplaceAll(content, old, new)。",
+        "构造 tmpPath := absPath + \".tmp\"，使用 os.WriteFile 写入新内容；成功后使用 os.Rename(tmpPath, absPath) 原子替换目标文件。",
+        "写入或重命名失败时删除 tmpPath 并返回错误。"
+      ],
+      "edge_cases": [
+        "当 old 在文件中出现次数为 0 且 expectedOccurrences > 0 时要返回友好错误提示。",
+        "替换中不需要处理正则，仅使用精确字符串匹配。"
+      ]
+    },
+    {
+      "id": "5.1_truncate_output",
+      "phase": "阶段五：Shield – 受控执行模块",
+      "name": "实现 TruncateOutputString 输出截断函数",
+      "status": "done",
+      "file": "internal/workspace/shield.go",
+      "dependencies": [],
+      "objective": "对超长 stdout/stderr 文本做头尾截断，减少上下文占用。",
+      "implementation": [
+        "实现 func TruncateOutputString(s string, maxLen int) string。",
+        "当 maxLen <= 0 或 len(s) <= maxLen 时，直接返回 s。",
+        "计算 half := maxLen / 2，取 head := s[:half]，tail := s[len(s)-half:]。",
+        "使用 strings.TrimRightFunc(head, func(r rune) bool { return r > 127 }) 去掉 head 末尾的非 ASCII 字符，避免截断在多字节字符中间。",
+        "使用 strings.TrimLeftFunc(tail, func(r rune) bool { return r > 127 }) 去掉 tail 开头的非 ASCII 字符。",
+        "返回 head + \"\\n... [TRUNCATED] ...\\n\" + tail。"
+      ],
+      "edge_cases": [
+        "对于纯 ASCII 文本，截断不应破坏行结构。",
+        "对全部为非 ASCII 的文本，截断后可能比 maxLen 略短，这是可以接受的。"
+      ]
+    },
+    {
+      "id": "5.2_secure_exec_wrapper",
+      "phase": "阶段五：Shield – 受控执行模块",
+      "name": "实现 secureExec 带超时与截断的命令包装",
+      "status": "done",
+      "file": "internal/workspace/shield.go",
+      "dependencies": ["2.3_blocked_ext_and_allowed_cmd", "2.6_execute", "5.1_truncate_output"],
+      "objective": "在 Execute 之上增加命令白名单、超时处理和输出截断逻辑。",
+      "implementation": [
+        "实现 func (w *OSWorkspace) secureExec(ctx context.Context, cmd string, args []string, timeoutSeconds int64) (stdout string, stderr string, exitCode int, err error)。",
+        "首先调用 w.isAllowedCommand(cmd)，不允许则返回错误并不执行命令。",
+        "根据 timeoutSeconds 参数和 w.cfg.BuildTimeout 计算实际超时时间，转换为 time.Duration。",
+        "使用 context.WithTimeout 创建 ctxWithTimeout, cancel，并在函数结束时调用 cancel()。",
+        "构造 fullCmd := cmd，当 args 非空时，将 fullCmd 更新为 cmd + \" \" + strings.Join(args, \" \")，再次使用 w.isAllowedCommand(fullCmd) 校验复合命令是否在白名单中。",
+        "调用 w.Execute(ctxWithTimeout, cmd, args, timeoutSeconds) 执行命令，获取 stdout、stderr 和 exitCode。",
+        "如返回错误且 ctxWithTimeout.Err()==context.DeadlineExceeded，则返回包含 \"command timeout\" 的错误消息；否则包装为通用命令执行错误。",
+        "对返回的 stdout 和 stderr 调用 TruncateOutputString(…, 2000) 做截断。",
+        "返回截断后的 stdout、stderr、exitCode 和错误。"
+      ],
+      "edge_cases": [
+        "当命令不在白名单时必须在 Execute 之前拒绝。",
+        "当 timeoutSeconds 为 0 且 BuildTimeout 为较大值时，应使用配置值而不是无限等待。"
+      ]
+    },
+    {
+      "id": "6.1_mcp_server_struct",
+      "phase": "阶段六：MCP 服务器与工具映射",
+      "name": "实现 MCP Server 封装结构与构造函数",
+      "status": "done",
+      "file": "internal/mcp/server.go",
+      "dependencies": ["1.4_logger_impl", "1.5_workspace_interface"],
+      "objective": "使用 mcp-golang 和 stdio transport 创建 MCP 服务端并持有 Workspace 与 Logger。",
+      "implementation": [
+        "在 internal/mcp/server.go 中定义 Server 结构体，字段为 ws workspace.Workspace, logger log.Logger, server *mcp.Server。",
+        "实现 func NewServer(ws workspace.Workspace, logger log.Logger) (*Server, error)：创建传输层 transport := stdio.NewStdioServerTransport()。",
+        "使用 mcp.NewServer(transport) 创建 mcpSrv。",
+        "调用 registerTools(mcpSrv, ws, logger) 注册所有工具，注册失败则返回错误。",
+        "返回 &Server{ws: ws, logger: logger, server: mcpSrv}。"
+      ],
+      "edge_cases": [
+        "registerTools 返回错误时必须中止构造并将错误向上传递。",
+        "不要在构造函数中启动 Serve 循环，只负责初始化。"
+      ]
+    },
+    {
+      "id": "6.2_mcp_server_run_stdio",
+      "phase": "阶段六：MCP 服务器与工具映射",
+      "name": "实现 RunSTDIO 启动循环",
+      "status": "done",
+      "file": "internal/mcp/server.go",
+      "dependencies": ["6.1_mcp_server_struct"],
+      "objective": "通过 stdio transport 运行 MCP 服务直到上下文取消。",
+      "implementation": [
+        "实现 func (s *Server) RunSTDIO(ctx context.Context) error。",
+        "在一个新的 goroutine 中调用 s.server.Serve()，如返回错误使用 s.logger.Error 记录上下文和错误信息。",
+        "在主 goroutine 中阻塞等待 <-ctx.Done()，当收到取消信号时返回 nil。",
+        "不要在此方法中直接调用 os.Exit 或 panic。"
+      ],
+      "edge_cases": [
+        "Serve 返回错误时只记录日志，不应导致整个进程立即崩溃。",
+        "多次调用 RunSTDIO 不在当前设计范围内，不需要支持。"
+      ]
+    },
+    {
+      "id": "6.3_mcp_args_structs",
+      "phase": "阶段六：MCP 服务器与工具映射",
+      "name": "定义 MCP 工具参数结构体",
+      "status": "done",
+      "file": "internal/mcp/register_tools.go",
+      "dependencies": [],
+      "objective": "为每个 MCP 工具定义一组稳定的 JSON 参数结构体。",
+      "implementation": [
+        "在 register_tools.go 中定义各工具参数结构体：ReadFileArgs, WriteFileArgs, HealthArgs, InspectWorkspaceArgs, ReadCodeFragmentArgs, ApplyUnifiedDiffArgs, SearchAndReplaceArgs, SecuredExecArgs。",
+        "为每个字段添加 json 标签和 jsonschema 标签，说明是否必填与语义，例如 Path 字段使用 json:\"path\" 和 jsonschema:\"required,description=...\"。",
+        "确保结构体字段与实际工具实现中使用的参数完全一致，避免使用未定义字段。"
+      ],
+      "edge_cases": [
+        "改动字段名或类型时需要同步更新工具实现和文档。",
+        "避免在参数结构体中加入与工具无关的字段。"
+      ]
+    },
+    {
+      "id": "6.4_register_mcp_tools",
+      "phase": "阶段六：MCP 服务器与工具映射",
+      "name": "注册所有 MCP 工具并映射到 Workspace 能力",
+      "status": "done",
+      "file": "internal/mcp/register_tools.go",
+      "dependencies": ["1.5_workspace_interface", "2.4_read_file", "2.5_write_file", "3.1_tree_and_inspect_workspace", "3.2_read_code_fragment", "4.5_apply_unified_diff_to_workspace", "4.6_search_and_replace", "5.1_truncate_output", "2.6_execute"],
+      "objective": "将 Workspace 的各项能力暴露为 MCP 工具：read/write/inspect/fragment/diff/search/exec/health。",
+      "implementation": [
+        "实现 registerTools 函数，依次调用 srv.RegisterTool 注册以下工具：workspace.read_file, workspace.write_file, workspace.health, workspace.inspect_workspace, workspace.read_code_fragment, workspace.apply_unified_diff, workspace.search_and_replace, workspace.secure_exec。",
+        "workspace.read_file：使用 ws.ReadFile(context.Background(), args.Path, args.MaxBytes)，对 MaxBytes<=0 使用默认值，返回文本包含文件路径、是否截断和内容。",
+        "workspace.write_file：调用 ws.WriteFile(context.Background(), args.Path, []byte(args.Content), args.AllowCreate)，成功后返回简单确认消息。",
+        "workspace.health：构造包含版本号（例如 0.5.0-local）、可用工具列表和 status:\"ok\" 的 map，经 json.Marshal 或 json.MarshalIndent 后以文本返回。",
+        "workspace.inspect_workspace：将 ws 强转为 *workspace.OSWorkspace，调用 InspectWorkspace 获取 []*TreeNode，再转换为可序列化的轻量结构数组并使用 json.MarshalIndent 转换为 JSON 文本返回。",
+        "workspace.read_code_fragment：强转为 *workspace.OSWorkspace，调用 ReadCodeFragment 获取 lines 和 truncated，将行用 \"\\n\" 拼接为字符串，并在 truncated==true 时附加 \"... [TRUNCATED] ...\"。",
+        "workspace.apply_unified_diff：强转为 *workspace.OSWorkspace，调用 ApplyUnifiedDiff(context.Background(), args.DiffText, args.DryRun)，返回应用文件列表或 dry-run 提示文本。",
+        "workspace.search_and_replace：调用 SearchAndReplace，返回实际替换次数和路径；当 ExpectedOccurrences==0 时在文本中说明这是 dry-run，仅统计不修改。",
+        "workspace.secure_exec：调用 ws.Execute(context.Background(), args.Command, args.Args, args.TimeoutSeconds)，使用 workspace.TruncateOutputString 对 stdout/stderr 做截断，将 ExitCode、STDOUT、STDERR 和错误信息拼接成可读文本返回。"
+      ],
+      "edge_cases": [
+        "当 ws 无法强转为 *workspace.OSWorkspace 时，需要返回清晰错误说明该 Workspace 不支持相应工具。",
+        "工具内部错误时，应在 ToolResponse 文本中体现错误细节，而不是让 MCP 进程直接崩溃。"
+      ]
+    },
+    {
+      "id": "7.1_main_entrypoint",
+      "phase": "阶段七：进程入口与配置集成",
+      "name": "实现命令行入口 main.go",
+      "status": "done",
+      "file": "cmd/opencode-mcp/main.go",
+      "dependencies": ["1.2_load_config", "1.3_validate_config", "1.4_logger_impl", "2.1_osworkspace_struct_new", "6.1_mcp_server_struct", "6.2_mcp_server_run_stdio"],
+      "objective": "从配置出发构建 Workspace、Logger 和 MCP Server，并通过 STDIO 运行。",
+      "implementation": [
+        "实现 loadConfigAndLogger 函数：调用 config.LoadConfig() 获取 cfg，调用 cfg.Validate() 验证配置，使用 log.NewStdLogger(cfg.LogLevel) 创建 logger，返回 cfg 和 logger。",
+        "在 run 函数中调用 loadConfigAndLogger，如出错直接返回。",
+        "根据 cfg.ConfigFile 是否为空使用 logger.Info 输出配置来源（文件路径或仅环境变量）。",
+        "调用 workspace.NewOSWorkspace(cfg) 创建本地 Workspace 实例，如出错返回错误。",
+        "使用 signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM) 创建可被中断信号取消的上下文 ctx。",
+        "调用 mcp.NewServer(ws, logger) 创建 MCP Server 实例，如出错返回错误。",
+        "调用 server.RunSTDIO(ctx) 启动 STDIO 循环，错误时返回包装后的错误。",
+        "在 main 函数中调用 run()，如返回错误则向 os.Stderr 写入错误信息并 os.Exit(1)。"
+      ],
+      "edge_cases": [
+        "任何初始化阶段的错误都应在启动前被捕获并以人类可读的消息输出到 stderr。",
+        "收到中断信号后应优雅退出，不遗留僵尸子进程。"
+      ]
+    },
+    {
+      "id": "8.1_tools_doc_sync",
+      "phase": "阶段八：文档与运行说明",
+      "name": "校准 TOOLS 文档与实际工具实现",
+      "status": "done",
+      "file": "TOOLS.md",
+      "dependencies": ["6.4_register_mcp_tools"],
+      "objective": "确保文档中列出的所有工具名称、参数和返回格式与 register_tools.go 中的实现严格一致。",
+      "implementation": [
+        "打开 TOOLS.md，列出所有工具章节，并与 internal/mcp/register_tools.go 中注册的工具名称逐一对比，确保名称完全匹配。",
+        "对每个工具，检查文档中列出的参数名和类型是否与对应 Args 结构体一致，例如 path, maxBytes, startLine 等。",
+        "根据工具返回的实际文本或 JSON 结构，修正文档中的返回示例，例如 workspace.health 返回的 JSON 中包含 version、tools、status 字段。",
+        "清除任何仍然提及远程 OpenCode 或废弃工具名称的段落。"
+      ],
+      "edge_cases": [
+        "文档变更不会被编译验证，因此要格外小心保持与代码同步。",
+        "如未来工具签名变化，需要同步更新 TOOLS.md。"
+      ]
+    },
+    {
+      "id": "8.2_agent_and_pi_docs",
+      "phase": "阶段八：文档与运行说明",
+      "name": "编写 AGENT 使用与树莓派部署说明",
+      "status": "done",
+      "file": "AGENT.md",
+      "dependencies": ["7.1_main_entrypoint", "2.7_backup_and_size"],
+      "objective": "告诉 AI AGENT 如何通过 MCP 工具进行本地开发，以及如何在树莓派 Zero 2W 上部署该服务。",
+      "implementation": [
+        "在 AGENT.md 中新增章节描述如何构建二进制：CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o opencode-mcp-local ./cmd/opencode-mcp，并解释每个环境变量的含义。",
+        "描述如何在上层 Agent 框架中以子进程方式启动该二进制，并通过 STDIO 通信。",
+        "说明 Config 文件和环境变量的配置方式，包括 RootDir、AllowedBuildCommands、MaxFileBytes、BuildTimeout 等字段如何影响行为。",
+        "为每个 MCP 工具提供 1–2 个典型使用场景和请求示例，帮助 Agent 理解工作流，例如结合 inspect_workspace+read_code_fragment+apply_unified_diff 完成一个小修改。",
+        "特别提醒在资源受限设备上（树莓派 Zero 2W）注意控制单次读写大小和命令执行时间。"
+      ],
+      "edge_cases": [
+        "文档中不能再引用已删除的远程配置或服务地址。",
+        "需要保证部署命令在 Linux/ARM64 上可直接复制运行。"
+      ]
+    },
+    {
+      "id": "9.1_osworkspace_unit_tests",
+      "phase": "阶段九：测试与验证",
+      "name": "为 OSWorkspace 编写单元测试",
+      "status": "done",
+      "file": "internal/workspace/os_workspace_test.go",
+      "dependencies": ["2.1_osworkspace_struct_new", "2.2_sanitize_path", "2.4_read_file", "2.5_write_file", "2.6_execute"],
+      "objective": "验证 OSWorkspace 的路径安全检查、文件读写和命令执行行为。",
+      "implementation": [
+        "在 os_workspace_test.go 中编写测试，使用 t.TempDir() 创建临时工作目录。",
+        "构造一个 Config 实例，将 RootDir 设为临时目录，配置 AllowedBuildCommands、BlockedExtensions 等字段。",
+        "测试 sanitizePath：对合法相对路径、绝对路径和超出 root 的路径进行测试，断言越界路径返回错误。",
+        "测试 ReadFile：在临时目录中写入一个小文件，调用 ReadFile 读取并断言内容一致；同时创建一个大文件并设置较小 MaxFileBytes，断言返回内容被截断并包含截断错误。",
+        "测试 WriteFile：测试 allowCreate=true 时创建新文件、allowCreate=false 时不存在文件返回错误，以及现有文件覆写行为。",
+        "测试 Execute：为 AllowedBuildCommands 配置一个简单命令（例如在 Linux 下使用 \"sh\"，在 Windows 下使用 \"cmd\" 或 \"echo\"），断言返回 exitCode 为 0 且输出包含预期内容。"
+      ],
+      "edge_cases": [
+        "测试中不能依赖固定系统命令行为，必要时根据 runtime.GOOS 分支选择不同命令。",
+        "所有测试文件都应创建在临时目录内，测试结束自动清理。"
+      ]
+    },
+    {
+      "id": "9.2_eyes_hands_shield_tests",
+      "phase": "阶段九：测试与验证",
+      "name": "为 Eyes/Hands/Shield 编写单元测试",
+      "status": "done",
+      "file": "internal/workspace/eyes_test.go",
+      "dependencies": ["3.1_tree_and_inspect_workspace", "3.2_read_code_fragment", "4.2_parse_unified_diff", "4.4_apply_patch_to_content", "4.5_apply_unified_diff_to_workspace", "4.6_search_and_replace", "5.1_truncate_output", "5.2_secure_exec_wrapper"],
+      "objective": "为空间感知、精准修改和受控执行模块编写细粒度单元测试。",
+      "implementation": [
+        "在 eyes_test.go 中测试 InspectWorkspace：在临时工作目录中创建多级目录结构和若干文件，检查返回的 TreeNode 列表是否包含正确路径、大小和修改时间，忽略 .git 和 node_modules 等目录。",
+        "在 eyes_test.go 中测试 ReadCodeFragment：构造一个包含多行内容的文件，测试正常范围、超大范围和大文件限制下的行为，断言 truncated 标志与错误信息。",
+        "在 hands_test.go 中为 parseUnifiedDiff、parseHunkHeader、applyPatchToContent 和 ApplyUnifiedDiff 编写测试，使用简单 diff 文本验证补丁应用后的文件内容是否符合预期。",
+        "在 hands_test.go 中测试 SearchAndReplace：构造包含多次 old 字符串的文件，验证 expectedOccurrences 匹配与不匹配时的行为以及 dry-run 模式。",
+        "在 shield_test.go 中测试 TruncateOutputString，覆盖短文本、长文本和包含 UTF-8 非 ASCII 字符的情况；测试 secureExec 包装对白名单校验和超时行为的处理。",
+        "所有测试用例都应使用 t.TempDir() 和上下文控制，避免依赖真实项目目录。"
+      ],
+      "edge_cases": [
+        "diff 和补丁测试要包括新增文件、删除文件和修改文件三种情况。",
+        "secureExec 测试要避免执行危险命令，只使用无副作用命令（如 echo、简短脚本）。"
+      ]
+    },
+    {
+      "id": "9.3_e2e_mcp_process_test",
+      "phase": "阶段九：测试与验证",
+      "name": "编写端到端 MCP 进程测试",
+      "status": "done",
+      "file": "e2e_mcp_test.go",
+      "dependencies": ["7.1_main_entrypoint", "6.4_register_mcp_tools"],
+      "objective": "启动 MCP 进程，模拟客户端通过 STDIO 调用工具，验证完整链路。",
+      "implementation": [
+        "在 e2e_mcp_test.go 中使用 go build 预先构建当前项目为本地二进制（可在 TestMain 或脚本中完成）。",
+        "在测试中使用 exec.Command 启动该二进制，将工作目录设置为一个临时目录，并通过 StdinPipe/StdoutPipe 与之通信。",
+        "构造符合 MCP 协议的请求消息，至少调用 workspace.health 和 workspace.read_file 工具，验证返回结果中包含正确的版本和工具列表以及文件内容。",
+        "使用 JSON 库解析返回消息，断言 ToolResponse 的格式与预期一致。",
+        "在测试结束时确保进程被正确终止，避免留下僵尸进程。"
+      ],
+      "edge_cases": [
+        "需要处理 Windows 下二进制文件扩展名 .exe 的差异。",
+        "端到端测试可能耗时较长，可通过 build tags 或 go test -short 控制是否执行。"
+      ]
+    }
+  ]
+}
