@@ -79,6 +79,26 @@ It exposes a set of MCP tools for reading/writing files, applying code patches, 
 
 ## 快速开始
 
+### 0. 一键安装（推荐）
+
+在支持 Bash 的环境（Linux/macOS）中，可以通过脚本一键安装：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/toughworm/AgentCode-Local-MCP/refs/heads/main/install-agentcode-mcp.sh -o install-agentcode-mcp.sh
+chmod +x install-agentcode-mcp.sh
+./install-agentcode-mcp.sh
+```
+
+安装完成后，二进制默认位于 `/usr/local/bin/agentcode-mcp`，配置文件位于 `~/.config/agentcode-mcp/config.json`。
+
+大多数 AI Agent 只能访问自己的工作目录，你可以直接把下面这个链接发给 AI，让它在线阅读使用说明（无需本地文件）：
+
+```text
+https://raw.githubusercontent.com/toughworm/AgentCode-Local-MCP/refs/heads/main/AGENT.md
+```
+
+
+
 ### 1. 安装 Go
 
 确保本机已经安装 Go 1.22+：
@@ -87,7 +107,7 @@ It exposes a set of MCP tools for reading/writing files, applying code patches, 
 go version
 ```
 
-### 2. 获取代码
+### 2. 获取代码（本地构建可选）
 
 ```bash
 git clone https://github.com/toughworm/AgentCode-Local-MCP.git
