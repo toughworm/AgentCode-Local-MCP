@@ -11,32 +11,32 @@ import (
 
 // ProviderConfig 定义单个 AI 提供商配置
 type ProviderConfig struct {
-	Name         string `json:"name"`
-	APIKey       string `json:"api_key"`
-	BaseURL      string `json:"base_url"`
-	DefaultModel string `json:"default_model"`
+	Name           string   `json:"name"`
+	APIKey         string   `json:"api_key"`
+	BaseURL        string   `json:"base_url"`
+	DefaultModel   string   `json:"default_model"`
 	FallbackModels []string `json:"fallback_models"`
 }
 
 // AIConfig AI 模型提供商配置
 type AIConfig struct {
-	Providers map[string]ProviderConfig `json:"providers"` // 键: "openai", "anthropic", "deepseek", "openrouter" 等
-	DefaultProvider string `json:"default_provider"`
+	Providers       map[string]ProviderConfig `json:"providers"` // 键: "openai", "anthropic", "deepseek", "openrouter" 等
+	DefaultProvider string                    `json:"default_provider"`
 }
 
 // Config 完整配置结构（完全本地模式）
 type Config struct {
-	RootDir         string         `json:"root_dir"`              // 工作区根目录（空则使用当前目录）
-	AI              AIConfig       `json:"ai"`
-	LogLevel        string         `json:"log_level"`
-	MaxSearchResults int           `json:"max_search_results"`
-	MaxFileBytes    int64          `json:"max_file_bytes"`
-	BuildTimeout    int64          `json:"build_timeout_seconds"` // 构建超时时间（秒）
-	AllowedBuildCommands []string  `json:"allowed_build_commands"` // 允许的构建命令列表（白名单）
-	AllowedPaths    []string       `json:"allowed_paths"`         // 允许操作的目录白名单（空表示不限制）
-	BlockedExtensions []string     `json:"blocked_extensions"`    // 拦截的文件扩展名黑名单
-	LowResourceMode  bool          `json:"low_resource_mode"`     // 低功耗模式（针对树莓派）
-	ConfigFile      string         `json:"-"`                     // 记住配置文件来源
+	RootDir              string   `json:"root_dir"` // 工作区根目录（空则使用当前目录）
+	AI                   AIConfig `json:"ai"`
+	LogLevel             string   `json:"log_level"`
+	MaxSearchResults     int      `json:"max_search_results"`
+	MaxFileBytes         int64    `json:"max_file_bytes"`
+	BuildTimeout         int64    `json:"build_timeout_seconds"`  // 构建超时时间（秒）
+	AllowedBuildCommands []string `json:"allowed_build_commands"` // 允许的构建命令列表（白名单）
+	AllowedPaths         []string `json:"allowed_paths"`          // 允许操作的目录白名单（空表示不限制）
+	BlockedExtensions    []string `json:"blocked_extensions"`     // 拦截的文件扩展名黑名单
+	LowResourceMode      bool     `json:"low_resource_mode"`      // 低功耗模式（针对树莓派）
+	ConfigFile           string   `json:"-"`                      // 记住配置文件来源
 }
 
 // 默认值
@@ -49,27 +49,27 @@ const (
 // 预置的提供商配置模板
 var builtinProviders = map[string]ProviderConfig{
 	"gemini": {
-		Name:         "Google Gemini",
-		BaseURL:      "https://generativelanguage.googleapis.com/v1beta",
-		DefaultModel: "gemini-2.0-pro-exp-02-05",
+		Name:           "Google Gemini",
+		BaseURL:        "https://generativelanguage.googleapis.com/v1beta",
+		DefaultModel:   "gemini-2.0-pro-exp-02-05",
 		FallbackModels: []string{"gemini-1.5-pro", "gemini-1.5-flash"},
 	},
 	"anthropic": {
-		Name:         "Anthropic",
-		BaseURL:      "https://api.anthropic.com",
-		DefaultModel: "claude-3-5-sonnet-latest",
+		Name:           "Anthropic",
+		BaseURL:        "https://api.anthropic.com",
+		DefaultModel:   "claude-3-5-sonnet-latest",
 		FallbackModels: []string{"claude-3-opus-latest", "claude-3-haiku-20240307"},
 	},
 	"deepseek": {
-		Name:         "DeepSeek",
-		BaseURL:      "https://api.deepseek.com",
-		DefaultModel: "deepseek-chat",
+		Name:           "DeepSeek",
+		BaseURL:        "https://api.deepseek.com",
+		DefaultModel:   "deepseek-chat",
 		FallbackModels: []string{"deepseek-reasoner"},
 	},
 	"openrouter": {
-		Name:         "OpenRouter",
-		BaseURL:      "https://openrouter.ai/api/v1",
-		DefaultModel: "openrouter/auto",
+		Name:           "OpenRouter",
+		BaseURL:        "https://openrouter.ai/api/v1",
+		DefaultModel:   "openrouter/auto",
 		FallbackModels: []string{"openrouter/llama-3.2-11b-vision-instruct", "openrouter/mistral-7b-instruct"},
 	},
 }
@@ -80,14 +80,13 @@ func LoadConfig() (*Config, error) {
 	cfg := &Config{}
 	cfg.setDefaults()
 
-	// 尝试加载配置文件
 	configPaths := []string{
 		"./config.json",
 		"./config.yaml",
-		os.ExpandEnv("$HOME/.opencode-mcp/config.json"),
-		os.ExpandEnv("$HOME/.opencode-mcp/config.yaml"),
-		"/etc/opencode-mcp/config.json",
-		"/etc/opencode-mcp/config.yaml",
+		os.ExpandEnv("$HOME/.config/agentcode-mcp/config.json"),
+		os.ExpandEnv("$HOME/.config/agentcode-mcp/config.yaml"),
+		"/etc/agentcode-mcp/config.json",
+		"/etc/agentcode-mcp/config.yaml",
 	}
 
 	loaded := false
@@ -136,7 +135,7 @@ func (c *Config) setDefaults() {
 
 	// 初始化 AI 配置，包含预置提供商
 	c.AI = AIConfig{
-		Providers:      make(map[string]ProviderConfig),
+		Providers:       make(map[string]ProviderConfig),
 		DefaultProvider: "gemini",
 	}
 	// 复制内置模板（避免修改原模板）
@@ -159,15 +158,15 @@ func loadFromFile(path string, cfg *Config) error {
 
 	// JSON
 	var partial struct {
-		AI              AIConfig       `json:"ai"`
-		LogLevel        string         `json:"log_level"`
-		MaxSearchResults int          `json:"max_search_results"`
-		MaxFileBytes     int64        `json:"max_file_bytes"`
-		BuildTimeout     int64        `json:"build_timeout_seconds"`
+		AI                   AIConfig `json:"ai"`
+		LogLevel             string   `json:"log_level"`
+		MaxSearchResults     int      `json:"max_search_results"`
+		MaxFileBytes         int64    `json:"max_file_bytes"`
+		BuildTimeout         int64    `json:"build_timeout_seconds"`
 		AllowedBuildCommands []string `json:"allowed_build_commands"`
-		AllowedPaths     []string      `json:"allowed_paths"`
-		BlockedExtensions []string     `json:"blocked_extensions"`
-		LowResourceMode  bool          `json:"low_resource_mode"`
+		AllowedPaths         []string `json:"allowed_paths"`
+		BlockedExtensions    []string `json:"blocked_extensions"`
+		LowResourceMode      bool     `json:"low_resource_mode"`
 	}
 	if err := json.Unmarshal(data, &partial); err != nil {
 		return err
@@ -308,7 +307,7 @@ func createPlaceholderConfig(cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	configDir := filepath.Join(home, ".opencode-mcp")
+	configDir := filepath.Join(home, ".config", "agentcode-mcp")
 	configPath := filepath.Join(configDir, "config.json")
 
 	// 确保目录存在
@@ -318,14 +317,14 @@ func createPlaceholderConfig(cfg *Config) error {
 
 	// 生成占位 JSON（本地模式配置）
 	placeholder := &Config{
-		LogLevel:           DefaultLogLevel,
-		MaxSearchResults:   DefaultMaxSearchResults,
-		MaxFileBytes:       DefaultMaxFileBytes,
-		BuildTimeout:       60,
+		LogLevel:             DefaultLogLevel,
+		MaxSearchResults:     DefaultMaxSearchResults,
+		MaxFileBytes:         DefaultMaxFileBytes,
+		BuildTimeout:         60,
 		AllowedBuildCommands: []string{"go build", "go test", "go vet", "go mod tidy", "go run"},
-		AllowedPaths:       []string{},
-		BlockedExtensions:  []string{".env", ".key", ".pem", ".crt", ".cer", ".p12", ".pfx", ".jks", ".keystore"},
-		LowResourceMode:    false,
+		AllowedPaths:         []string{},
+		BlockedExtensions:    []string{".env", ".key", ".pem", ".crt", ".cer", ".p12", ".pfx", ".jks", ".keystore"},
+		LowResourceMode:      false,
 	}
 
 	data, err := json.MarshalIndent(placeholder, "", "  ")
@@ -382,8 +381,8 @@ func getEnvInt64(key string, defaultValue int64) int64 {
 
 // 自定义错误类型
 type configError struct {
-	field    string
-	message  string
+	field   string
+	message string
 }
 
 func (e *configError) Error() string {

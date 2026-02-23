@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"opencode-go-mcp/internal/log"
 	"opencode-go-mcp/internal/workspace"
@@ -13,9 +15,10 @@ import (
 
 // Server 封装 mcp-golang 服务器
 type Server struct {
-	ws     workspace.Workspace
-	logger log.Logger
-	server *mcp.Server
+	ws           workspace.Workspace
+	logger       log.Logger
+	server       *mcp.Server
+	lastActivity atomic.Int64
 }
 
 // NewServer 创建 MCP 服务器并注册所有工具
@@ -23,16 +26,20 @@ func NewServer(ws workspace.Workspace, logger log.Logger) (*Server, error) {
 	transport := stdio.NewStdioServerTransport()
 	mcpSrv := mcp.NewServer(transport)
 
-	// 注册所有工具
-	if err := registerTools(mcpSrv, ws, logger); err != nil {
-		return nil, fmt.Errorf("failed to register tools: %w", err)
-	}
-
-	return &Server{
+	s := &Server{
 		ws:     ws,
 		logger: logger,
 		server: mcpSrv,
-	}, nil
+	}
+	s.lastActivity.Store(time.Now().UnixNano())
+
+	if err := registerTools(mcpSrv, ws, logger, func() {
+		s.lastActivity.Store(time.Now().UnixNano())
+	}); err != nil {
+		return nil, fmt.Errorf("failed to register tools: %w", err)
+	}
+
+	return s, nil
 }
 
 // 参数结构体定义（本地模式，无 Project 参数）
@@ -52,10 +59,33 @@ type HealthArgs struct{}
 
 // RunSTDIO 启动服务器
 func (s *Server) RunSTDIO(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	idleTimeout := 30 * time.Minute
+
 	// 启动 Serve（非阻塞，内部启动 readLoop）
 	go func() {
 		if err := s.server.Serve(); err != nil {
 			s.logger.Error(ctx, "MCP server error", "error", err)
+		}
+	}()
+
+	go func() {
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				last := time.Unix(0, s.lastActivity.Load())
+				if time.Since(last) >= idleTimeout {
+					s.logger.Info(ctx, "Idle timeout reached, shutting down", "idleTimeoutMinutes", 30)
+					cancel()
+					return
+				}
+			}
 		}
 	}()
 

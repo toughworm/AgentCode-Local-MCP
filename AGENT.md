@@ -1,8 +1,8 @@
 # Agent Quick Reference
 
-**针对 AI Agent 的 opencode-go-mcp 使用指南**
+**针对 AI Agent 的 agentcode-local-mcp 使用指南**
 
-当你（AI）连接到此 MCP 服务器时，以下工具可供使用。所有工具通过 JSON-RPC stdio 通信，无需额外配置。
+当你（AI）连接到此 MCP 服务器时，以下工具可供使用。所有工具通过 JSON-RPC stdio 通信。
 
 ---
 
@@ -10,245 +10,71 @@
 
 ### 典型编码循环
 
-1. **探索项目**: 使用 `list_directory` 了解结构，再用 `search_symbols` 或 `search_code` 定位相关文件
-2. **读取上下文**: 使用 `read_file` 读取目标文件，或用 `get_file_context` 自动聚合依赖
-3. **提出修改**: 基于文件内容生成补丁，先用 `apply_patch` with `dry_run: true` 预览
-4. **应用补丁**: 确认预览无误后，`dry_run: false` 应用
-5. **验证**: 使用 `run_build` 执行 `go test` 或 `go build` 验证
-6. **重复**: 根据错误调整
-
-### 搜索策略
-
-- **已知文件** → `read_file` 直接读取
-- **符号名称**（函数/结构体）→ `search_symbols`（更精确）
-- **关键词** → `search_code`（更快，但可能噪声多）
-- **不了解项目结构** → `list_directory` 递归浏览 1-2 层
+1. **探索项目**: 使用 `workspace.inspect_workspace` 了解结构。
+2. **读取上下文**: 使用 `workspace.read_file` 读取目标文件，或用 `workspace.read_code_fragment` 读取大文件的特定部分。
+3. **定位修改点**: 确定需要修改的行号或文本块。
+4. **实施修改**:
+   - 精确替换：用 `workspace.search_and_replace`（建议先设置 `expectedOccurrences: 0` 探测）。
+   - 补丁应用：生成 Unified Diff 并调用 `workspace.apply_unified_diff`（建议先 `dryRun: true`）。
+5. **验证**: 使用 `workspace.secure_exec` 执行 `go test` 或 `go build` 等验证命令。
+6. **循环**: 根据报错信息进一步调整。
 
 ---
 
 ## 🛠️ 工具速查表
 
-| 工具名 | 参数要点 | 返回值关键字段 | 典型使用场景 |
-|--------|----------|----------------|--------------|
-| `opencode.read_file` | `path` (req), `max_bytes` (opt, def 1MB) | `content[0].text`, `truncated` | 查看文件内容 |
-| `opencode.write_file` | `path` (req), `content` (req), `allow_create` (def true), `message` (opt) | `success` | 创建/更新文件 |
-| `opencode.list_directory` | `path` (req), `depth` (def 1), `exclude` (opt) | `files[]` with `is_dir`, `size` | 列出目录内容 |
-| `opencode.search_code` | `query` (req), `path` (opt), `limit` (def 50) | `results[]` with `line`, `preview` | 全文搜索 |
-| `opencode.search_symbols` | `query` (req), `limit` (def 50) | `symbols[]` with `type`, `file_path`, `line` | 查找函数/结构体定义 |
-| `opencode.get_file_context` | `path` (req), `max_depth` (def 2) | `content[]` 多个文件 | 理解依赖关系 |
-| `opencode.apply_patch` | `path` (req), `patch` (req), `dry_run` (def false) | `success`, `dry_run`, `preview` (if dry-run) | 应用补丁 |
-| `opencode.run_build` | `command` (req), `args` (req) | `success`, `output`, `errors[]`, `duration_ms` | 构建/测试 |
-| `opencode.health` | (none) | `status`, `version`, `tools[]`, `stats` | 检查服务状态 |
-
----
-
-## 📝 工具响应格式（MCP ToolResponse）
-
-所有工具返回结构化的 JSON，包含：
-
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "JSON string of the tool's result"
-    }
-  ],
-  "isError": false
-}
-```
-
-实际 payload 在 `content[0].text` 中，是一个 JSON 字符串，需要解析。
-
-### 示例：read_file 返回
-
-```json
-{
-  "content": [
-    {
-      "text": "{\"content\":[{\"text\":\"package main\\n\\nfunc main(){\\n}\\n\"}],\"truncated\":false}"
-    }
-  ],
-  "isError": false
-}
-```
-
-要提取文件内容：
-
-1. 取 `content[0].text`
-2. `json.Unmarshal` 得到 `{"content":[{"text":"..."}],"truncated":false}`
-3. 再取 `content[0].text` 得到实际文件内容
+| 工具名 | 关键参数 | 典型场景 |
+|--------|----------|----------|
+| `workspace.read_file` | `path`, `maxBytes` | 读取完整文件内容 |
+| `workspace.write_file` | `path`, `content`, `allowCreate` | 创建新文件或覆盖现有文件 |
+| `workspace.inspect_workspace` | `path`, `maxDepth` | 浏览目录树，获取修改时间 |
+| `workspace.read_code_fragment` | `path`, `startLine`, `endLine` | 分页读取大文件或特定行 |
+| `workspace.apply_unified_diff` | `diffText`, `dryRun` | 应用标准 Unified Diff 补丁 |
+| `workspace.search_and_replace` | `path`, `old`, `new`, `expectedOccurrences` | 精确字符串搜索与替换 |
+| `workspace.secure_exec` | `command`, `args`, `timeoutSeconds` | 在白名单限制下执行命令 |
+| `workspace.health` | (无) | 获取版本及可用工具列表 |
 
 ---
 
 ## ⚠️ 常见陷阱
 
 ### 1. 路径问题
+- `path` 是相对于项目根目录的路径，不要使用绝对路径。
+- 如果配置了 `allowedPaths`，路径必须在其中。
 
-- `path` 是相对于项目根目录的路径，不是绝对路径
-- 如果配置了 `allowed_paths`，路径必须在白名单内
-- 使用 `list_directory` 先确认文件存在
+### 2. 输出与大小限制
+- `read_file` 默认 1MB，大文件建议用 `read_code_fragment` 分页。
+- `secure_exec` 的输出会被截断为约 2000 字符，保留开头和结尾。
 
-### 2. 大小限制
+### 3. 补丁应用
+- `apply_unified_diff` 需要标准的 Unified Diff 格式。
+- **始终先 Dry-Run**: 检查预览是否符合预期。
 
-- `read_file` 默认最多 1MB，`max_bytes` 可调整（低功耗模式强制限制为 64KB）
-- `write_file` 单次最多 128KB（低功耗模式）
-- 大文件考虑用 `get_file_context` 只读取关键部分
-
-### 3. 补丁格式
-
-`apply_patch` 需要 standard unified diff：
-
-```
---- a/file.go
-+++ b/file.go
-@@ -1,3 +1,4 @@
-+// new line
- package main
-```
-
-可用 `diff -u` 或在线 diff 生成器。
-
-** Always dry-run first **：先设置 `dry_run: true` 审查预览，确认再应用。
-
-### 4. 构建超时
-
-`run_build` 默认 60 秒超时。大项目测试可能超时。错误信息：
-
-```json
-{
-  "errors": [
-    {
-      "file": "",
-      "line": 0,
-      "message": "build timeout"
-    }
-  ]
-}
-```
-
-解决方案：修改配置文件增加 `build_timeout`。
+### 4. 命令权限
+- `secure_exec` 只能运行 `allowedBuildCommands` 中列出的命令前缀。
+- 如果命令不在白名单，工具会返回错误。
 
 ---
 
-## 🔒 安全理解
-
-作为 AI，你**不能**：
-
-- 访问 `allowed_paths` 外的文件（会返回 permission_denied）
-- 读取敏感扩展名（`.env`, `.key`, `.pem` 等，会被拦截）
-- 执行非白名单命令（`run_build` 仅允许 `go` 相关命令）
-
-如果用户需要访问特定路径，让他们修改配置。不要尝试路径遍历攻击（如 `../../../etc/passwd`）——会被 `checkSecurity` 拦截。
+## 🔒 安全策略
+- **路径沙箱**: 无法访问 `rootDir` 以外的文件。
+- **扩展名限制**: 默认拦截对二进制文件（`.exe`, `.dll`, `.so`等）的操作。
+- **命令检查**: 只有被明确授权的命令才可以执行。
 
 ---
 
-## 🔍 调试提示
-
-### 查看服务状态
-
-```json
-{
-  "tool": "opencode.health",
-  "params": {}
-}
-```
-
-关注 `stats.cache_hit_ratio`：过低说明频繁读取新文件，可考虑缓存策略。
-
-### 测试 MCP 连接
-
-```bash
-# 手动发送 initialize 请求
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test"}}}' | ./opencode-mcp
-```
-
-应返回 `initialize` 响应和 `tools/list` 通知。
+## 🧠 进程生命周期建议
+- 当你不再需要继续操作当前代码仓时，应请求上层宿主（如 Claude Desktop、Cursor 或自建框架）主动关闭对应的 MCP 进程，以释放小型设备上的内存资源。
+- 作为兜底机制，如果该 MCP 进程空闲超过约 30 分钟（无工具调用），它会自动退出；下次需要时可以由宿主重新拉起。
 
 ---
 
-## 🎯 最佳实践
-
-1. **先搜索，再读取**：用 `search_symbols` 快速定位，避免 `list_directory` 全目录扫描
-2. **使用缓存**：对同一个文件多次读取，`read_file` 有缓存，性能很好
-3. **增量修改**：每次只应用一个小补丁，然后 `run_build` 验证，不要一次改太多
-4. **上下文聚合**：修改接口时，用 `get_file_context` 读取所有实现文件
-5. **错误处理**：`run_build` 返回的 `errors` 数组按顺序排列，修复第一条再继续
-6. **dry-run 习惯**：任何 `apply_patch` 前先预览，避免误修改
+## 🎯 最佳实践 (Best Practices)
+1. **最小化读取**: 优先阅读具体的代码片段，不要动辄读取整个仓库。
+2. **原子化修改**: 每次只改一个功能点，并立即运行测试验证。
+3. **充分利用 Replace**: 对于简单的修改，`search_and_replace` 往往比 `apply_unified_diff` 更稳健。
+4. **错误导向**: 如果构建失败，仔细分析输出中的错误行号，精准定位。
 
 ---
-
-## 🌱 树莓派环境部署与使用说明
-
-本 MCP 特别考虑在低功耗设备（如树莓派 Zero 2W）上运行。
-
-### 对用户（人类）的简要部署步骤
-
-在树莓派上：
-
-1. 安装依赖
-   - `sudo apt update`
-   - 安装 Git 与构建工具：`sudo apt install -y git build-essential`
-   - 安装 Go（1.22+），并确保 `go version` 正常。
-2. 获取代码并编译
-   - `git clone https://github.com/<your-org>/opencode-go-mcp.git`
-   - `cd opencode-go-mcp`
-   - `go build -o opencode-mcp ./cmd/opencode-mcp`
-3. 配置 OpenCode 凭证
-   - 设置环境变量，例如：
-     - `export OPCODE_TOKEN="你的-opencode-token"`
-     - 可选：`OPCODE_DEFAULT_PROJECT`, `OPCODE_LOG_LEVEL=info` 等。
-4. 在 MCP 宿主（例如运行在树莓派上的 AI 客户端）中配置：
-   - `command`: `/home/pi/opencode-go-mcp/opencode-mcp`
-   - `env`: 包含 `OPCODE_TOKEN` 等环境变量。
-
-之后，由 MCP 宿主负责通过 stdio 启动该进程。
-
-### 对你（AI Agent）的树莓派使用建议
-
-树莓派资源有限，请特别注意：
-
-- 控制并发
-  - 同时发起的 MCP 请求建议控制在 2–4 个以内。
-  - 避免在短时间内发起大量 `search_code` 或 `run_build` 请求。
-- 控制读取量
-  - 使用 `max_bytes` 限制 `read_file` 返回的大小（如 64KB 或 128KB）。
-  - 对大文件优先使用 `get_file_context` 读取关键部分，而不是整文件。
-- 谨慎构建与测试
-  - 使用 `run_build` 时，优先执行增量、小范围的命令（例如单包测试），避免频繁全仓库构建。
-  - 若遇到超时或资源不足错误，优先缩小测试范围，而不是重试同样的重命令。
-- 合理分批修改
-  - 将改动拆成多次小补丁，逐次 `apply_patch` + `run_build`，而不是一次性大重构。
-
-在树莓派环境中，你的目标是：**最小化单次 I/O 和 CPU 占用，同时保持修改的可验证性。**
-
----
-
-## 📚 示例对话
-
-**用户**: "帮我给 main.go 添加一个 Println 调用"
-
-**AI 思考流程**:
-
-1. `read_file("main.go")` → 获取当前内容
-2. 生成补丁（例如在函数内插入 `println("hello")`）
-3. `apply_patch(path="main.go", patch=..., dry_run=true)` → 预览
-4. AI 向用户展示预览："我打算在这些行添加... 是否同意？"
-5. 用户同意后: `apply_patch(..., dry_run=false)`
-6. `run_build(command="go", args=["build"])` → 验证
-7. 如果成功，回复用户；如果失败，根据错误调整
-
----
-
-## 🔗 相关文档
-
-- **用户视角**: [README.md](README.md) - 安装、配置、Claude Desktop 集成
-- **配置详解**: [CONFIGURATION.md](CONFIGURATION.md) - 所有配置选项
-- **工具手册**: [TOOLS.md](TOOLS.md) - 每个工具的详细参数和示例
-- **开发者**: [DEVELOPMENT.md](DEVELOPMENT.md) - 如何构建、测试、贡献
-
----
-
-**你（AI）不需要关心配置和安装——那是用户的事。你只需要知道这些工具可用，并按照上述指南调用即可。**
 
 祝你编码愉快！🤖✨

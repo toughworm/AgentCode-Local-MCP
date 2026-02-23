@@ -14,9 +14,10 @@ import (
 )
 
 // registerTools 注册所有 MCP 工具（本地模式，无 Project 参数）
-func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) error {
+func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger, onActivity func()) error {
 	// workspace.read_file tool
 	if err := srv.RegisterTool("workspace.read_file", "Read a file from local workspace", func(args ReadFileArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		maxBytes := args.MaxBytes
 		if maxBytes <= 0 {
 			maxBytes = 1024 * 1024
@@ -35,6 +36,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// workspace.write_file tool
 	if err := srv.RegisterTool("workspace.write_file", "Write content to a file", func(args WriteFileArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		err := ws.WriteFile(context.Background(), args.Path, []byte(args.Content), args.AllowCreate)
 		if err != nil {
 			return nil, fmt.Errorf("write_file: %w", err)
@@ -46,6 +48,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// workspace.health tool
 	if err := srv.RegisterTool("workspace.health", "Health check with tool list", func(args HealthArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		tools := []string{
 			"workspace.read_file", "workspace.write_file", "workspace.inspect_workspace",
 			"workspace.read_code_fragment", "workspace.apply_unified_diff", "workspace.search_and_replace",
@@ -64,6 +67,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// Eyes: workspace.inspect_workspace
 	if err := srv.RegisterTool("workspace.inspect_workspace", "Inspect workspace directory structure", func(args InspectWorkspaceArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		maxDepth := args.MaxDepth
 		if maxDepth <= 0 {
 			maxDepth = 2
@@ -106,6 +110,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// Eyes: workspace.read_code_fragment
 	if err := srv.RegisterTool("workspace.read_code_fragment", "Read a code fragment by line range", func(args ReadCodeFragmentArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		osw, ok := ws.(*workspace.OSWorkspace)
 		if !ok {
 			return nil, fmt.Errorf("workspace does not support ReadCodeFragment")
@@ -125,6 +130,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// Hands: workspace.apply_unified_diff
 	if err := srv.RegisterTool("workspace.apply_unified_diff", "Apply a unified diff patch", func(args ApplyUnifiedDiffArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		osw, ok := ws.(*workspace.OSWorkspace)
 		if !ok {
 			return nil, fmt.Errorf("workspace does not support ApplyUnifiedDiff")
@@ -144,6 +150,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// Hands: workspace.search_and_replace
 	if err := srv.RegisterTool("workspace.search_and_replace", "Search and replace exact string", func(args SearchAndReplaceArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		osw, ok := ws.(*workspace.OSWorkspace)
 		if !ok {
 			return nil, fmt.Errorf("workspace does not support SearchAndReplace")
@@ -163,6 +170,7 @@ func registerTools(srv *mcp.Server, ws workspace.Workspace, logger log.Logger) e
 
 	// Shield: workspace.secure_exec
 	if err := srv.RegisterTool("workspace.secure_exec", "Execute a command securely with timeout", func(args SecuredExecArgs) (*mcp.ToolResponse, error) {
+		onActivity()
 		stdout, stderr, exitCode, err := ws.Execute(context.Background(), args.Command, args.Args, args.TimeoutSeconds)
 		stdout = workspace.TruncateOutputString(stdout, 2000)
 		stderr = workspace.TruncateOutputString(stderr, 2000)

@@ -67,8 +67,8 @@ It exposes a set of MCP tools for reading/writing files, applying code patches, 
 | 工具名称                     | 作用                         | 关键参数                                                                 |
 |-----------------------------|------------------------------|--------------------------------------------------------------------------|
 | `workspace.read_file`       | 读取文件                     | `path`, `maxBytes`                                                      |
-| `workspace.write_file`      | 写入文件（原子替换）         | `path`, `content`, `allowCreate`                                       |
-| `workspace.inspect_workspace` | 扫描目录树并返回列表       | `relPath`, `maxDepth`                                                  |
+| `workspace.write_file`      | 写入文件（替换或创建）         | `path`, `content`, `allowCreate`                                       |
+| `workspace.inspect_workspace` | 扫描目录树并返回列表       | `path`, `maxDepth`                                                     |
 | `workspace.read_code_fragment` | 按行读取代码片段         | `path`, `startLine`, `endLine`                                         |
 | `workspace.apply_unified_diff` | 应用 unified diff 补丁   | `diffText`, `dryRun`                                                   |
 | `workspace.search_and_replace` | 搜索并替换文本           | `path`, `old`, `new`, `expectedOccurrences`                            |
@@ -90,16 +90,16 @@ go version
 ### 2. 获取代码
 
 ```bash
-git clone https://github.com/<your-org>/opencode-go-mcp.git
-cd opencode-go-mcp
+git clone https://github.com/toughworm/AgentCode-Local-MCP.git
+cd AgentCode-Local-MCP
 ```
 
 ### 3. 配置
 
 创建配置文件（推荐）：
 
-- 路径：`~/.config/opencode-mcp/config.json`（Linux/macOS）
-- 或 `C:\Users\<you>\.config\opencode-mcp\config.json`（Windows）
+- 路径：`~/.config/agentcode-mcp/config.json`（Linux/macOS）
+- 或 `C:\Users\<you>\.config\agentcode-mcp\config.json`（Windows）
 
 示例：
 
@@ -109,7 +109,6 @@ cd opencode-go-mcp
   "rootDir": "/path/to/your/workspace",
   "allowedBuildCommands": ["go", "go test", "go build", "go run"],
   "maxFileBytes": 1048576,
-  "allowedPaths": [],
   "blockedExtensions": [".exe", ".dll", ".so", ".dylib"],
   "buildTimeout": 60
 }
@@ -121,52 +120,36 @@ cd opencode-go-mcp
 - `rootDir`：Agent 允许操作的工作目录根路径
 - `allowedBuildCommands`：允许执行的命令前缀（白名单）
 - `maxFileBytes`：单次读取文件的最大字节数
-- `allowedPaths`：可选；限定在 `rootDir` 内再进一步限制可访问前缀
 - `blockedExtensions`：禁止读写的文件扩展名
 - `buildTimeout`：命令执行超时时间（秒）
-
-也可以用环境变量覆盖：
-
-```bash
-export OPENCODE_MCP_ROOT="/path/to/your/workspace"
-export OPENCODE_MCP_LOG_LEVEL="debug"
-export OPENCODE_MCP_BUILD_TIMEOUT=120
-```
 
 ### 4. 构建
 
 在项目根目录：
 
 ```bash
-go build -o opencode-mcp ./cmd/opencode-mcp
-```
-
-在树莓派或其他 ARM 设备上，如果你在 x86_64 上交叉编译，可以参考：
-
-```bash
-# 树莓派 64 位 Linux
-env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o opencode-mcp-local ./cmd/opencode-mcp
+go build -o agentcode-mcp ./cmd/opencode-mcp
 ```
 
 ### 5. 运行
 
 ```bash
-./opencode-mcp --config ~/.config/opencode-mcp/config.json
+./agentcode-mcp --config ~/.config/agentcode-mcp/config.json
 ```
 
 进程会通过 **STDIO** 使用 MCP 协议通讯，等待来自 AI Agent 的 JSON-RPC 请求。
 
 ---
 
-## 在 Claude / OpenClaw 中接入
+## 在 Claude / Cursor 中接入
 
-以 OpenClaw / Claude Desktop 为例，在它的配置中增加：
+以 Claude Desktop 为例，在它的配置中增加：
 
 ```json
 {
   "mcpServers": {
     "agentcode-local": {
-      "command": "/absolute/path/to/opencode-mcp",
+      "command": "/absolute/path/to/agentcode-mcp",
       "args": ["--config", "/absolute/path/to/config.json"],
       "env": {}
     }
@@ -174,7 +157,7 @@ env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o opencode-mcp-local ./cmd/o
 }
 ```
 
-完成后，Claude / OpenClaw 就能在对话中调用：
+完成后，Claude 就能在对话中调用：
 
 - `workspace.read_file`
 - `workspace.write_file`
@@ -198,6 +181,7 @@ env CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o opencode-mcp-local ./cmd/o
 - 文件安全：
   - 修改前自动备份 `.bak`，出错可回滚
   - 所有路径都经过 `sanitizePath`，防止目录逃逸
+  - 长时间空闲（约 30 分钟无工具调用）时进程会自动退出，可由宿主按需重新拉起
 
 你可以安全地把它部署到树莓派，作为“本地 Agent 专用的开发后端”。
 
@@ -260,11 +244,6 @@ go test ./e2e -v
 
 ---
 
-如果你愿意改一个更正式的仓库名，可以考虑：
-
-- `agentcode-local-mcp`
-- `agent-workspace-go-mcp`
-- `local-code-mcp`
 
 但对外展示的产品名可以直接用本文标题：  
 **AgentCode Local MCP · AI Agent 的本地代码工作台**，一眼就能看出它是干什么的。
