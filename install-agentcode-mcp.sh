@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BINARY_URL="REPLACE_WITH_AGENTCODE_MCP_BINARY_URL"
+BINARY_URL="https://github.com/toughworm/AgentCode-Local-MCP/releases/download/agent-code-dev/agentcode-mcp-linux-arm64"
 BINARY_NAME="agentcode-mcp"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/agentcode-mcp}"
 CONFIG_PATH="$CONFIG_DIR/config.json"
 
-if [ "$BINARY_URL" = "REPLACE_WITH_AGENTCODE_MCP_BINARY_URL" ]; then
+if [ "$BINARY_URL" = "https://github.com/toughworm/AgentCode-Local-MCP/releases/download/agent-code-dev/agentcode-mcp-linux-arm64" ]; then
   echo "Please set BINARY_URL in install-agentcode-mcp.sh before running."
   exit 1
 fi
