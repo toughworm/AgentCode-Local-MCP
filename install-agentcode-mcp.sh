@@ -7,11 +7,6 @@ INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-$HOME/.config/agentcode-mcp}"
 CONFIG_PATH="$CONFIG_DIR/config.json"
 
-if [ "$BINARY_URL" = "https://github.com/toughworm/AgentCode-Local-MCP/releases/download/agent-code-dev/agentcode-mcp-linux-arm64" ]; then
-  echo "Please set BINARY_URL in install-agentcode-mcp.sh before running."
-  exit 1
-fi
-
 mkdir -p "$INSTALL_DIR"
 
 tmp_bin="$(mktemp)"
@@ -49,4 +44,3 @@ fi
 echo "Installed $BINARY_NAME to $INSTALL_DIR"
 echo "Config file: $CONFIG_PATH"
 echo "You can now configure agentcode-mcp in your MCP-enabled client."
-
